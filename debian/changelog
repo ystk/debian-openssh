@@ -1,3 +1,254 @@
+openssh (1:6.0p1-4) unstable; urgency=low
+
+  * CVE-2010-5107: Improve DoS resistance by changing default of MaxStartups
+    to 10:30:100 (closes: #700102).
+
+ -- Colin Watson <cjwatson@debian.org>  Fri, 08 Feb 2013 21:27:00 +0000
+
+openssh (1:6.0p1-3) unstable; urgency=low
+
+  * debconf template translations:
+    - Add Indonesian (thanks, Andika Triwidada; closes: #681670).
+  * Call restorecon on copied ~/.ssh/authorized_keys if possible, since some
+    SELinux policies require this (closes: #658675).
+  * Add ncurses-term to openssh-server's Recommends, since it's often needed
+    to support unusual terminal emulators on clients (closes: #675362).
+
+ -- Colin Watson <cjwatson@debian.org>  Fri, 24 Aug 2012 06:55:36 +0100
+
+openssh (1:6.0p1-2) unstable; urgency=low
+
+  * Tighten libssl1.0.0 and libcrypto1.0.0-udeb dependencies to the current
+    "fix" version at build time (closes: #678661).
+
+ -- Colin Watson <cjwatson@debian.org>  Sun, 24 Jun 2012 12:16:06 +0100
+
+openssh (1:6.0p1-1) unstable; urgency=low
+
+  [ Roger Leigh ]
+  * Display dynamic part of MOTD from /run/motd.dynamic, if it exists
+    (closes: #669699).
+
+  [ Colin Watson ]
+  * Update OpenSSH FAQ to revision 1.113, fixing missing line break (closes:
+    #669667).
+  * New upstream release (closes: #671010,
+    http://www.openssh.org/txt/release-6.0).
+    - Fix IPQoS not being set on non-mapped v4-in-v6 addressed connections
+      (closes: #643312, #650512, #671075).
+    - Add a new privilege separation sandbox implementation for Linux's new
+      seccomp sandbox, automatically enabled on platforms that support it.
+      (Note: privilege separation sandboxing is still experimental.)
+  * Fix a bashism in configure's seccomp_filter check.
+  * Add a sandbox fallback mechanism, so that behaviour on Linux depends on
+    whether the running system's kernel has seccomp_filter support, not the
+    build system's kernel (forwarded upstream as
+    https://bugzilla.mindrot.org/show_bug.cgi?id=2011).
+
+ -- Colin Watson <cjwatson@debian.org>  Sat, 26 May 2012 13:48:14 +0100
+
+openssh (1:5.9p1-5) unstable; urgency=low
+
+  * Use dpkg-buildflags, including for hardening support; drop use of
+    hardening-includes.
+  * Fix cross-building:
+    - Allow using a cross-architecture pkg-config.
+    - Pass default LDFLAGS to contrib/Makefile.
+    - Allow dh_strip to strip gnome-ssh-askpass, rather than calling
+      'install -s'.
+
+ -- Colin Watson <cjwatson@debian.org>  Mon, 02 Apr 2012 11:20:33 +0100
+
+openssh (1:5.9p1-4) unstable; urgency=low
+
+  * Disable OpenSSL version check again, as its SONAME is sufficient
+    nowadays (closes: #664383).
+
+ -- Colin Watson <cjwatson@debian.org>  Mon, 19 Mar 2012 11:06:30 +0000
+
+openssh (1:5.9p1-3) unstable; urgency=low
+
+  * debconf template translations:
+    - Update Polish (thanks, Michał Kułach; closes: #659829).
+  * Ignore errors writing to console in init script (closes: #546743).
+  * Move ssh-krb5 to Section: oldlibs.
+
+ -- Colin Watson <cjwatson@debian.org>  Fri, 24 Feb 2012 08:56:18 +0000
+
+openssh (1:5.9p1-2) unstable; urgency=low
+
+  * Mark openssh-client and openssh-server as Multi-Arch: foreign.
+
+ -- Colin Watson <cjwatson@debian.org>  Wed, 09 Nov 2011 02:06:48 +0000
+
+openssh (1:5.9p1-1) unstable; urgency=low
+
+  * New upstream release (http://www.openssh.org/txt/release-5.9).
+    - Introduce sandboxing of the pre-auth privsep child using an optional
+      sshd_config(5) "UsePrivilegeSeparation=sandbox" mode that enables
+      mandatory restrictions on the syscalls the privsep child can perform.
+    - Add new SHA256-based HMAC transport integrity modes from
+      http://www.ietf.org/id/draft-dbider-sha2-mac-for-ssh-02.txt.
+    - The pre-authentication sshd(8) privilege separation slave process now
+      logs via a socket shared with the master process, avoiding the need to
+      maintain /dev/log inside the chroot (closes: #75043, #429243,
+      #599240).
+    - ssh(1) now warns when a server refuses X11 forwarding (closes:
+      #504757).
+    - sshd_config(5)'s AuthorizedKeysFile now accepts multiple paths,
+      separated by whitespace (closes: #76312).  The authorized_keys2
+      fallback is deprecated but documented (closes: #560156).
+    - ssh(1) and sshd(8): set IPv6 traffic class from IPQoS, as well as IPv4
+      ToS/DSCP (closes: #498297).
+    - ssh-add(1) now accepts keys piped from standard input.  E.g. "ssh-add
+      - < /path/to/key" (closes: #229124).
+    - Clean up lost-passphrase text in ssh-keygen(1) (closes: #444691).
+    - Say "required" rather than "recommended" in unprotected-private-key
+      warning (LP: #663455).
+  * Update OpenSSH FAQ to revision 1.112.
+
+ -- Colin Watson <cjwatson@debian.org>  Wed, 07 Sep 2011 23:46:00 +0100
+
+openssh (1:5.8p1-7) unstable; urgency=low
+
+  * Only recommend ssh-import-id when built on Ubuntu (closes: #635887).
+  * Use 'dpkg-vendor --derives-from Ubuntu' to detect Ubuntu systems rather
+    than 'lsb_release -is' so that Ubuntu derivatives behave the same way as
+    Ubuntu itself.
+
+ -- Colin Watson <cjwatson@debian.org>  Fri, 29 Jul 2011 14:27:52 +0100
+
+openssh (1:5.8p1-6) unstable; urgency=low
+
+  * openssh-client and openssh-server Suggests: monkeysphere.
+  * Quieten logs when multiple from= restrictions are used in different
+    authorized_keys lines for the same key; it's still not ideal, but at
+    least you'll only get one log entry per key (closes: #630606).
+  * Merge from Ubuntu (Dustin Kirkland):
+    - openssh-server Recommends: ssh-import-id (no-op in Debian since that
+      package doesn't exist there, but this reduces the Ubuntu delta).
+
+ -- Colin Watson <cjwatson@debian.org>  Thu, 28 Jul 2011 17:10:18 +0100
+
+openssh (1:5.8p1-5) unstable; urgency=low
+
+  * Drop openssh-server's dependency on openssh-blacklist to a
+    recommendation (closes: #622604).
+  * Update Vcs-* fields and README.source for Alioth changes.
+  * Backport from upstream:
+    - Make hostbased auth with ECDSA keys work correctly (closes: #633368).
+
+ -- Colin Watson <cjwatson@debian.org>  Sun, 24 Jul 2011 11:06:47 +0100
+
+openssh (1:5.8p1-4) unstable; urgency=low
+
+  * Drop hardcoded dependencies on libssl0.9.8 and libcrypto0.9.8-udeb,
+    since the required minimum versions are rather old now anyway and
+    openssl has bumped its SONAME (thanks, Julien Cristau; closes: #620828).
+  * Remove unreachable code from openssh-server.postinst.
+
+ -- Colin Watson <cjwatson@debian.org>  Mon, 04 Apr 2011 15:56:18 +0100
+
+openssh (1:5.8p1-3) unstable; urgency=low
+
+  * Correct ssh-keygen instruction in the changelog for 1:5.7p1-1 (thanks,
+    Joel Stanley).
+  * Allow ssh-add to read from FIFOs (thanks, Daniel Kahn Gillmor; closes:
+    #614897).
+
+ -- Colin Watson <cjwatson@debian.org>  Fri, 18 Mar 2011 16:42:42 +0000
+
+openssh (1:5.8p1-2) unstable; urgency=low
+
+  * Upload to unstable.
+
+ -- Colin Watson <cjwatson@debian.org>  Tue, 08 Feb 2011 10:59:17 +0000
+
+openssh (1:5.8p1-1) experimental; urgency=low
+
+  * New upstream release (http://www.openssh.org/txt/release-5.8):
+    - Fix stack information leak in legacy certificate signing
+      (http://www.openssh.com/txt/legacy-cert.adv).
+
+ -- Colin Watson <cjwatson@debian.org>  Sat, 05 Feb 2011 11:13:11 +0000
+
+openssh (1:5.7p1-2) experimental; urgency=low
+
+  * Fix crash in ssh_selinux_setfscreatecon when SELinux is disabled
+    (LP: #708571).
+
+ -- Colin Watson <cjwatson@debian.org>  Thu, 27 Jan 2011 12:14:17 +0000
+
+openssh (1:5.7p1-1) experimental; urgency=low
+
+  * New upstream release (http://www.openssh.org/txt/release-5.7):
+    - Implement Elliptic Curve Cryptography modes for key exchange (ECDH)
+      and host/user keys (ECDSA) as specified by RFC5656.  ECDH and ECDSA
+      offer better performance than plain DH and DSA at the same equivalent
+      symmetric key length, as well as much shorter keys.
+    - sftp(1)/sftp-server(8): add a protocol extension to support a hard
+      link operation.  It is available through the "ln" command in the
+      client.  The old "ln" behaviour of creating a symlink is available
+      using its "-s" option or through the preexisting "symlink" command.
+    - scp(1): Add a new -3 option to scp: Copies between two remote hosts
+      are transferred through the local host (closes: #508613).
+    - ssh(1): "atomically" create the listening mux socket by binding it on
+      a temporary name and then linking it into position after listen() has
+      succeeded.  This allows the mux clients to determine that the server
+      socket is either ready or stale without races (closes: #454784).
+      Stale server sockets are now automatically removed (closes: #523250).
+    - ssh(1): install a SIGCHLD handler to reap expired child process
+      (closes: #594687).
+    - ssh(1)/ssh-agent(1): honour $TMPDIR for client xauth and ssh-agent
+      temporary directories (closes: #357469, although only if you arrange
+      for ssh-agent to actually see $TMPDIR since the setgid bit will cause
+      it to be stripped off).
+  * Update to current GSSAPI patch from
+    http://www.sxw.org.uk/computing/patches/openssh-5.7p1-gsskex-all-20110125.patch:
+    - Add GSSAPIServerIdentity option.
+  * Generate ECDSA host keys on fresh installations.  Upgraders who wish to
+    add such host keys should manually add 'HostKey
+    /etc/ssh/ssh_host_ecdsa_key' to /etc/ssh/sshd_config and run 'ssh-keygen
+    -q -f /etc/ssh/ssh_host_ecdsa_key -N "" -t ecdsa'.
+  * Build-depend on libssl-dev (>= 0.9.8g) to ensure sufficient ECC support.
+  * Backport SELinux build fix from CVS.
+  * Rearrange selinux-role.patch so that it links properly given this
+    SELinux build fix.
+
+ -- Colin Watson <cjwatson@debian.org>  Wed, 26 Jan 2011 23:48:02 +0000
+
+openssh (1:5.6p1-3) experimental; urgency=low
+
+  * Drop override for desktop-file-but-no-dh_desktop-call, which Lintian no
+    longer issues.
+  * Merge 1:5.5p1-6.
+
+ -- Colin Watson <cjwatson@debian.org>  Thu, 30 Dec 2010 11:48:00 +0000
+
+openssh (1:5.6p1-2) experimental; urgency=low
+
+  * Backport upstream patch to install a SIGCHLD handler to reap expired ssh
+    child processes, preventing lots of zombies when using ControlPersist
+    (closes: #594687).
+
+ -- Colin Watson <cjwatson@debian.org>  Tue, 26 Oct 2010 14:46:40 +0100
+
+openssh (1:5.6p1-1) experimental; urgency=low
+
+  * New upstream release (http://www.openssh.com/txt/release-5.6):
+    - Added a ControlPersist option to ssh_config(5) that automatically
+      starts a background ssh(1) multiplex master when connecting.  This
+      connection can stay alive indefinitely, or can be set to automatically
+      close after a user-specified duration of inactivity (closes: #335697,
+      #350898, #454787, #500573, #550262).
+    - Support AuthorizedKeysFile, AuthorizedPrincipalsFile,
+      HostbasedUsesNameFromPacketOnly, and PermitTunnel in sshd_config(5)
+      Match blocks (closes: #549858).
+    - sftp(1): fix ls in working directories that contain globbing
+      characters in their pathnames (LP: #530714).
+
+ -- Colin Watson <cjwatson@debian.org>  Tue, 24 Aug 2010 00:37:54 +0100
+
 openssh (1:5.5p1-6) unstable; urgency=low
 
   * Touch /var/run/sshd/.placeholder in the preinst so that /var/run/sshd,

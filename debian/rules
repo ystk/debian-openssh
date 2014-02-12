@@ -3,16 +3,8 @@
 # Uncomment this to turn on verbose mode.
 # export DH_VERBOSE=1
 
-include /usr/share/hardening-includes/hardening.make
-
 # This has to be exported to make some magic below work.
 export DH_OPTIONS
-
-ifeq (,$(filter noopt,$(DEB_BUILD_OPTIONS)))
-OPTFLAGS := -O2
-else
-OPTFLAGS := -O0
-endif
 
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
   RUN_TESTS := yes
@@ -25,13 +17,14 @@ DEB_BUILD_GNU_TYPE ?= $(shell dpkg-architecture -qDEB_BUILD_GNU_TYPE)
 
 ifeq ($(DEB_BUILD_GNU_TYPE),$(DEB_HOST_GNU_TYPE))
   CC := gcc
+  PKG_CONFIG = pkg-config
 else
   CC := $(DEB_HOST_GNU_TYPE)-gcc
+  PKG_CONFIG = $(DEB_HOST_GNU_TYPE)-pkg-config
   RUN_TESTS :=
 endif
 
 DEB_HOST_ARCH_OS := $(shell dpkg-architecture -qDEB_HOST_ARCH_OS 2>/dev/null)
-DEB_HOST_ARCH_CPU := $(shell dpkg-architecture -qDEB_HOST_ARCH_CPU 2>/dev/null)
 
 # Take account of old dpkg-architecture output.
 ifeq ($(DEB_HOST_ARCH_OS),)
@@ -40,31 +33,23 @@ ifeq ($(DEB_HOST_ARCH_OS),)
     DEB_HOST_ARCH_OS := hurd
   endif
 endif
-ifeq ($(DEB_HOST_ARCH_CPU),)
-  DEB_HOST_ARCH_CPU := $(shell dpkg-architecture -qDEB_HOST_GNU_CPU)
-  ifeq ($(DEB_HOST_ARCH_CPU),x86_64)
-    DEB_HOST_ARCH_CPU := amd64
-  endif
-endif
-
-ifneq (,$(findstring :$(DEB_HOST_ARCH_OS):,:linux:knetbsd:))
-  ifneq (,$(findstring :$(DEB_HOST_ARCH_CPU):,:mips:mipsel:))
-    # Apparently this is not implied by -fPIE, at least on the mipsen.
-    PIC_CFLAGS := -fPIC
-    PIC_LDFLAGS := -fPIC
-  endif
-endif
 
 # Change the version string to include the Debian version
 SSH_EXTRAVERSION := Debian-$(shell dpkg-parsechangelog | sed -n -e '/^Version:/s/Version: //p' | sed -e 's/[^-]*-//')
 
-DISTRIBUTOR := $(shell lsb_release -is 2>/dev/null || echo Debian)
+DISTRIBUTOR := $(shell dpkg-vendor --derives-from Ubuntu 2>/dev/null && echo Ubuntu)
 ifeq ($(DISTRIBUTOR),Ubuntu)
 DEFAULT_PATH := /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/bin/X11:/usr/games
 else
 DEFAULT_PATH := /usr/local/bin:/usr/bin:/bin:/usr/bin/X11:/usr/games
 endif
 SUPERUSER_PATH := /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/bin/X11
+
+ifeq ($(DISTRIBUTOR),Ubuntu)
+server_recommends := ssh-import-id
+else
+server_recommends :=
+endif
 
 # Common path configuration.
 confflags += --sysconfdir=/etc/ssh
@@ -74,7 +59,6 @@ confflags += --disable-strip
 confflags += --with-mantype=doc
 confflags += --with-4in6
 confflags += --with-privsep-path=/var/run/sshd
-confflags += --without-rand-helper
 
 # The Hurd needs libcrypt for res_query et al.
 ifeq ($(DEB_HOST_ARCH_OS),hurd)
@@ -103,7 +87,9 @@ confflags += --with-default-path=$(DEFAULT_PATH) --with-superuser-path=$(SUPERUS
 confflags_udeb += --with-default-path=/usr/local/bin:/usr/bin:/bin --with-superuser-path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # Compiler flags.
-cflags := $(OPTFLAGS) $(PIC_CFLAGS) $(HARDENING_CFLAGS)
+export DEB_BUILD_MAINT_OPTIONS := hardening=+all
+default_cflags := $(shell dpkg-buildflags --get CPPFLAGS) $(shell dpkg-buildflags --get CFLAGS)
+cflags := $(default_cflags)
 cflags += -DLOGIN_PROGRAM=\"/bin/login\" -DLOGIN_NO_ENDOPT
 cflags += -DSSH_EXTRAVERSION=\"$(SSH_EXTRAVERSION)\"
 cflags_udeb := -Os
@@ -112,7 +98,8 @@ confflags += --with-cflags='$(cflags)'
 confflags_udeb += --with-cflags='$(cflags_udeb)'
 
 # Linker flags.
-confflags += --with-ldflags='$(strip -Wl,--as-needed $(PIC_LDFLAGS) $(HARDENING_LDFLAGS))'
+default_ldflags := $(shell dpkg-buildflags --get LDFLAGS)
+confflags += --with-ldflags='$(strip -Wl,--as-needed $(default_ldflags))'
 confflags_udeb += --with-ldflags='-Wl,--as-needed'
 
 %:
@@ -134,7 +121,7 @@ override_dh_auto_build:
 	$(MAKE) -C build-deb -j 2 ASKPASS_PROGRAM='/usr/bin/ssh-askpass'
 	$(MAKE) -C build-udeb -j 2 ASKPASS_PROGRAM='/usr/bin/ssh-askpass' ssh scp sftp sshd ssh-keygen
 
-	$(MAKE) -C contrib gnome-ssh-askpass2 CC='$(CC) $(OPTFLAGS) -g -Wall -Wl,--as-needed'
+	$(MAKE) -C contrib gnome-ssh-askpass2 CC='$(CC) $(default_cflags) -Wall -Wl,--as-needed $(default_ldflags)' PKG_CONFIG=$(PKG_CONFIG)
 
 override_dh_auto_test:
 ifeq ($(RUN_TESTS),yes)
@@ -160,7 +147,7 @@ override_dh_install:
 	dh_install -popenssh-client-udeb -popenssh-server-udeb \
 		--sourcedir=build-udeb
 
-	install -s -o root -g root -m 755 contrib/gnome-ssh-askpass2 debian/ssh-askpass-gnome/usr/lib/openssh/gnome-ssh-askpass
+	install -o root -g root -m 755 contrib/gnome-ssh-askpass2 debian/ssh-askpass-gnome/usr/lib/openssh/gnome-ssh-askpass
 
 	install -o root -g root debian/openssh-server.if-up debian/openssh-server/etc/network/if-up.d/openssh-server
 	install -o root -g root -m 644 debian/openssh-server.ufw.profile debian/openssh-server/etc/ufw/applications.d/openssh-server
@@ -187,6 +174,11 @@ override_dh_fixperms:
 	dh_fixperms
 	chmod u+s debian/openssh-client/usr/lib/openssh/ssh-keysign
 
+# Tighten libssl dependencies to match the check in entropy.c.
+override_dh_shlibdeps:
+	dh_shlibdeps
+	debian/adjust-openssl-dependencies
+
 override_dh_installdeb:
 	dh_installdeb
 	perl -i debian/substitute-conffile.pl \
@@ -200,6 +192,9 @@ override_dh_installdeb:
 		ETC_INIT_D_SSH debian/openssh-server/etc/init.d/ssh \
 		ETC_PAM_D_SSH debian/openssh-server/etc/pam.d/sshd \
 		debian/openssh-server/DEBIAN/preinst
+
+override_dh_gencontrol:
+	dh_gencontrol -- -V'openssh-server:Recommends=$(server_recommends)'
 
 debian/faq.html:
 	wget -O - http://www.openssh.org/faq.html | \

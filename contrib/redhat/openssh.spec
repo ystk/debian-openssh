@@ -1,4 +1,4 @@
-%define ver 5.5p1
+%define ver 6.0p1
 %define rel 1
 
 # OpenSSH privilege separation requires a user & group ID
@@ -74,7 +74,7 @@ Release: %{rel}
 %endif
 URL: http://www.openssh.com/portable.html
 Source0: ftp://ftp.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-%{version}.tar.gz
-%if ! %{skip_x11_askpass}
+%if ! %{no_x11_askpass}
 Source1: http://www.jmknoble.net/software/x11-ssh-askpass/x11-ssh-askpass-%{aversion}.tar.gz
 %endif
 License: BSD
@@ -84,24 +84,24 @@ Obsoletes: ssh
 %if %{build6x}
 PreReq: initscripts >= 5.00
 %else
-PreReq: initscripts >= 5.20
+Requires: initscripts >= 5.20
 %endif
-BuildPreReq: perl, openssl-devel, tcp_wrappers
-BuildPreReq: /bin/login
+BuildRequires: perl, openssl-devel, tcp_wrappers
+BuildRequires: /bin/login
 %if ! %{build6x}
 BuildPreReq: glibc-devel, pam
 %else
-BuildPreReq: /usr/include/security/pam_appl.h
+BuildRequires: /usr/include/security/pam_appl.h
 %endif
 %if ! %{no_x11_askpass}
-BuildPreReq: /usr/include/X11/Xlib.h
+BuildRequires: /usr/include/X11/Xlib.h
 %endif
 %if ! %{no_gnome_askpass}
-BuildPreReq: pkgconfig
+BuildRequires: pkgconfig
 %endif
 %if %{kerberos5}
-BuildPreReq: krb5-devel
-BuildPreReq: krb5-libs
+BuildRequires: krb5-devel
+BuildRequires: krb5-libs
 %endif
 
 %package clients
@@ -114,7 +114,7 @@ Obsoletes: ssh-clients
 Summary: The OpenSSH server daemon.
 Group: System Environment/Daemons
 Obsoletes: ssh-server
-PreReq: openssh = %{version}-%{release}, chkconfig >= 0.9
+Requires: openssh = %{version}-%{release}, chkconfig >= 0.9
 %if ! %{build6x}
 Requires: /etc/pam.d/system-auth
 %endif
@@ -335,7 +335,7 @@ fi
 
 %files
 %defattr(-,root,root)
-%doc CREDITS ChangeLog INSTALL LICENCE OVERVIEW README* PROTOCOL* TODO WARNING*
+%doc CREDITS ChangeLog INSTALL LICENCE OVERVIEW README* PROTOCOL* TODO
 %attr(0755,root,root) %{_bindir}/scp
 %attr(0644,root,root) %{_mandir}/man1/scp.1*
 %attr(0755,root,root) %dir %{_sysconfdir}/ssh
@@ -407,6 +407,9 @@ fi
 %endif
 
 %changelog
+* Wed Jul 14 2010 Tim Rice <tim@multitalents.net>
+- test for skip_x11_askpass (line 77) should have been for no_x11_askpass
+
 * Mon Jun 2 2003 Damien Miller <djm@mindrot.org>
 - Remove noip6 option. This may be controlled at run-time in client config
   file using new AddressFamily directive
@@ -709,7 +712,7 @@ fi
   it generates.
 
 * Thu Oct  5 2000 Nalin Dahyabhai <nalin@redhat.com>
-- Add BuildPreReq on /usr/include/security/pam_appl.h to be sure we always
+- Add BuildRequires on /usr/include/security/pam_appl.h to be sure we always
   build PAM authentication in.
 - Try setting SSH_ASKPASS if gnome-ssh-askpass is installed.
 - Clean out no-longer-used patches.
@@ -718,7 +721,7 @@ fi
 
 * Mon Oct  2 2000 Nalin Dahyabhai <nalin@redhat.com>
 - Update x11-askpass to 1.0.2. (#17835)
-- Add BuildPreReqs for /bin/login and /usr/bin/rsh so that configure will
+- Add BuildRequiress for /bin/login and /usr/bin/rsh so that configure will
   always find them in the right place. (#17909)
 - Set the default path to be the same as the one supplied by /bin/login, but
   add /usr/X11R6/bin. (#17909)

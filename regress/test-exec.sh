@@ -167,7 +167,7 @@ have_prog()
 cleanup ()
 {
 	if [ -f $PIDFILE ]; then
-		pid=`cat $PIDFILE`
+		pid=`$SUDO cat $PIDFILE`
 		if [ "X$pid" = "X" ]; then
 			echo no sshd running
 		else
@@ -204,6 +204,11 @@ verbose ()
 	fi
 }
 
+warn ()
+{
+	echo "WARNING: $@" >>$TEST_SSH_LOGFILE
+	echo "WARNING: $@"
+}
 
 fail ()
 {
@@ -219,6 +224,17 @@ fatal ()
 	fail "$@"
 	cleanup
 	exit $RESULT
+}
+
+# Check whether preprocessor symbols are defined in config.h.
+config_defined ()
+{
+	str=$1
+	while test "x$2" != "x" ; do
+		str="$str|$2"
+		shift
+	done
+	egrep "^#define.*($str)" ${BUILDDIR}/config.h >/dev/null 2>&1
 }
 
 RESULT=0

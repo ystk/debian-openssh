@@ -1,4 +1,4 @@
-/* $OpenBSD: channels.h,v 1.103 2010/01/26 01:28:35 djm Exp $ */
+/* $OpenBSD: channels.h,v 1.109 2011/09/23 07:45:05 markus Exp $ */
 
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
@@ -57,9 +57,12 @@
 #define SSH_CHANNEL_MUX_CLIENT		16	/* Conn. to mux slave */
 #define SSH_CHANNEL_MAX_TYPE		17
 
+#define CHANNEL_CANCEL_PORT_STATIC	-1
+
 struct Channel;
 typedef struct Channel Channel;
 
+typedef void channel_open_fn(int, int, void *);
 typedef void channel_callback_fn(int, void *);
 typedef int channel_infilter_fn(struct Channel *, char *, int);
 typedef void channel_filter_cleanup_fn(int, void *);
@@ -115,6 +118,7 @@ struct Channel {
 	char    *path;
 		/* path for unix domain sockets, or host name for forwards */
 	int     listening_port;	/* port being listened for forwards */
+	char   *listening_addr;	/* addr being listened for forwards */
 	int     host_port;	/* remote port to connect for forwards */
 	char   *remote_name;	/* remote hostname */
 
@@ -130,7 +134,7 @@ struct Channel {
 	char   *ctype;		/* type */
 
 	/* callback */
-	channel_callback_fn	*open_confirm;
+	channel_open_fn		*open_confirm;
 	void			*open_confirm_ctx;
 	channel_callback_fn	*detach_user;
 	int			detach_close;
@@ -151,6 +155,7 @@ struct Channel {
 	/* multiplexing protocol hook, called for each packet received */
 	mux_callback_fn		*mux_rcb;
 	void			*mux_ctx;
+	int			mux_pause;
 };
 
 #define CHAN_EXTENDED_IGNORE		0
@@ -208,7 +213,7 @@ void	 channel_stop_listening(void);
 void	 channel_send_open(int);
 void	 channel_request_start(int, char *, int);
 void	 channel_register_cleanup(int, channel_callback_fn *, int);
-void	 channel_register_open_confirm(int, channel_callback_fn *, void *);
+void	 channel_register_open_confirm(int, channel_open_fn *, void *);
 void	 channel_register_filter(int, channel_infilter_fn *,
     channel_outfilter_fn *, channel_filter_cleanup_fn *, void *);
 void	 channel_register_status_confirm(int, channel_confirm_cb *,
@@ -248,6 +253,7 @@ void	 channel_set_af(int af);
 void     channel_permit_all_opens(void);
 void	 channel_add_permitted_opens(char *, int);
 int	 channel_add_adm_permitted_opens(char *, int);
+void	 channel_update_permitted_opens(int, int);
 void	 channel_clear_permitted_opens(void);
 void	 channel_clear_adm_permitted_opens(void);
 void 	 channel_print_adm_permitted_opens(void);
@@ -259,9 +265,11 @@ int	 channel_request_remote_forwarding(const char *, u_short,
 	     const char *, u_short);
 int	 channel_setup_local_fwd_listener(const char *, u_short,
 	     const char *, u_short, int);
-void	 channel_request_rforward_cancel(const char *host, u_short port);
+int	 channel_request_rforward_cancel(const char *host, u_short port);
 int	 channel_setup_remote_fwd_listener(const char *, u_short, int *, int);
 int	 channel_cancel_rport_listener(const char *, u_short);
+int	 channel_cancel_lport_listener(const char *, u_short, int, int);
+int	 permitopen_port(const char *);
 
 /* x11 forwarding */
 
@@ -269,7 +277,7 @@ int	 x11_connect_display(void);
 int	 x11_create_display_inet(int, int, int, u_int *, int **);
 void     x11_input_open(int, u_int32_t, void *);
 void	 x11_request_forwarding_with_spoofing(int, const char *, const char *,
-	     const char *);
+	     const char *, int);
 void	 deny_input_open(int, u_int32_t, void *);
 
 /* agent forwarding */

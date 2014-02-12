@@ -1,4 +1,4 @@
-/* $OpenBSD: packet.c,v 1.166 2009/06/27 09:29:06 andreas Exp $ */
+/* $OpenBSD: packet.c,v 1.176 2012/01/25 19:40:09 markus Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -199,13 +199,13 @@ static struct session_state *active_state, *backup_state;
 static struct session_state *
 alloc_session_state(void)
 {
-    struct session_state *s = xcalloc(1, sizeof(*s));
+	struct session_state *s = xcalloc(1, sizeof(*s));
 
-    s->connection_in = -1;
-    s->connection_out = -1;
-    s->max_packet_size = 32768;
-    s->packet_timeout_ms = -1;
-    return s;
+	s->connection_in = -1;
+	s->connection_out = -1;
+	s->max_packet_size = 32768;
+	s->packet_timeout_ms = -1;
+	return s;
 }
 
 /*
@@ -242,7 +242,7 @@ packet_set_connection(int fd_in, int fd_out)
 void
 packet_set_timeout(int timeout, int count)
 {
-	if (timeout == 0 || count == 0) {
+	if (timeout <= 0 || count <= 0) {
 		active_state->packet_timeout_ms = -1;
 		return;
 	}
@@ -391,8 +391,8 @@ packet_get_ssh1_cipher(void)
 }
 
 void
-packet_get_state(int mode, u_int32_t *seqnr, u_int64_t *blocks, u_int32_t *packets,
-    u_int64_t *bytes)
+packet_get_state(int mode, u_int32_t *seqnr, u_int64_t *blocks,
+    u_int32_t *packets, u_int64_t *bytes)
 {
 	struct packet_state *state;
 
@@ -422,10 +422,8 @@ packet_set_state(int mode, u_int32_t seqnr, u_int64_t blocks, u_int32_t packets,
 	state->bytes = bytes;
 }
 
-/* returns 1 if connection is via ipv4 */
-
-int
-packet_connection_is_ipv4(void)
+static int
+packet_connection_af(void)
 {
 	struct sockaddr_storage to;
 	socklen_t tolen = sizeof(to);
@@ -434,14 +432,12 @@ packet_connection_is_ipv4(void)
 	if (getsockname(active_state->connection_out, (struct sockaddr *)&to,
 	    &tolen) < 0)
 		return 0;
-	if (to.ss_family == AF_INET)
-		return 1;
 #ifdef IPV4_IN_IPV6
 	if (to.ss_family == AF_INET6 &&
 	    IN6_IS_ADDR_V4MAPPED(&((struct sockaddr_in6 *)&to)->sin6_addr))
-		return 1;
+		return AF_INET;
 #endif
-	return 0;
+	return to.ss_family;
 }
 
 /* Sets the connection into non-blocking mode. */
@@ -547,8 +543,7 @@ packet_start_compression(int level)
  */
 
 void
-packet_set_encryption_key(const u_char *key, u_int keylen,
-    int number)
+packet_set_encryption_key(const u_char *key, u_int keylen, int number)
 {
 	Cipher *cipher = cipher_by_number(number);
 
@@ -640,6 +635,14 @@ packet_put_bignum2(BIGNUM * value)
 {
 	buffer_put_bignum2(&active_state->outgoing_packet, value);
 }
+
+#ifdef OPENSSL_HAS_ECC
+void
+packet_put_ecpoint(const EC_GROUP *curve, const EC_POINT *point)
+{
+	buffer_put_ecpoint(&active_state->outgoing_packet, curve, point);
+}
+#endif
 
 /*
  * Finalizes and sends the packet.  If the encryption key has been set,
@@ -967,8 +970,10 @@ packet_send2(void)
 
 	/* during rekeying we can only send key exchange messages */
 	if (active_state->rekeying) {
-		if (!((type >= SSH2_MSG_TRANSPORT_MIN) &&
-		    (type <= SSH2_MSG_TRANSPORT_MAX))) {
+		if ((type < SSH2_MSG_TRANSPORT_MIN) ||
+		    (type > SSH2_MSG_TRANSPORT_MAX) ||
+		    (type == SSH2_MSG_SERVICE_REQUEST) ||
+		    (type == SSH2_MSG_SERVICE_ACCEPT)) {
 			debug("enqueue packet: %u", type);
 			p = xmalloc(sizeof(*p));
 			p->type = type;
@@ -1307,7 +1312,7 @@ packet_read_poll2(u_int32_t *seqnr_p)
 		macbuf = mac_compute(mac, active_state->p_read.seqnr,
 		    buffer_ptr(&active_state->incoming_packet),
 		    buffer_len(&active_state->incoming_packet));
-		if (memcmp(macbuf, buffer_ptr(&active_state->input),
+		if (timingsafe_bcmp(macbuf, buffer_ptr(&active_state->input),
 		    mac->mac_len) != 0) {
 			logit("Corrupted MAC on input.");
 			if (need > PACKET_MAX_SIZE)
@@ -1443,12 +1448,6 @@ packet_read_poll_seqnr(u_int32_t *seqnr_p)
 	}
 }
 
-int
-packet_read_poll(void)
-{
-	return packet_read_poll_seqnr(NULL);
-}
-
 /*
  * Buffers the given amount of input characters.  This is intended to be used
  * together with packet_read_poll.
@@ -1511,6 +1510,14 @@ packet_get_bignum2(BIGNUM * value)
 	buffer_get_bignum2(&active_state->incoming_packet, value);
 }
 
+#ifdef OPENSSL_HAS_ECC
+void
+packet_get_ecpoint(const EC_GROUP *curve, EC_POINT *point)
+{
+	buffer_get_ecpoint(&active_state->incoming_packet, curve, point);
+}
+#endif
+
 void *
 packet_get_raw(u_int *length_ptr)
 {
@@ -1544,6 +1551,13 @@ void *
 packet_get_string_ptr(u_int *length_ptr)
 {
 	return buffer_get_string_ptr(&active_state->incoming_packet, length_ptr);
+}
+
+/* Ensures the returned string has no embedded \0 characters in it. */
+char *
+packet_get_cstring(u_int *length_ptr)
+{
+	return buffer_get_cstring(&active_state->incoming_packet, length_ptr);
 }
 
 /*
@@ -1728,25 +1742,38 @@ packet_not_very_much_data_to_write(void)
 }
 
 static void
-packet_set_tos(int interactive)
+packet_set_tos(int tos)
 {
-#if defined(IP_TOS) && !defined(IP_TOS_IS_BROKEN)
-	int tos = interactive ? IPTOS_LOWDELAY : IPTOS_THROUGHPUT;
-
-	if (!packet_connection_is_on_socket() ||
-	    !packet_connection_is_ipv4())
+#ifndef IP_TOS_IS_BROKEN
+	if (!packet_connection_is_on_socket())
 		return;
-	if (setsockopt(active_state->connection_in, IPPROTO_IP, IP_TOS, &tos,
-	    sizeof(tos)) < 0)
-		error("setsockopt IP_TOS %d: %.100s:",
-		    tos, strerror(errno));
-#endif
+	switch (packet_connection_af()) {
+# ifdef IP_TOS
+	case AF_INET:
+		debug3("%s: set IP_TOS 0x%02x", __func__, tos);
+		if (setsockopt(active_state->connection_in,
+		    IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) < 0)
+			error("setsockopt IP_TOS %d: %.100s:",
+			    tos, strerror(errno));
+		break;
+# endif /* IP_TOS */
+# ifdef IPV6_TCLASS
+	case AF_INET6:
+		debug3("%s: set IPV6_TCLASS 0x%02x", __func__, tos);
+		if (setsockopt(active_state->connection_in,
+		    IPPROTO_IPV6, IPV6_TCLASS, &tos, sizeof(tos)) < 0)
+			error("setsockopt IPV6_TCLASS %d: %.100s:",
+			    tos, strerror(errno));
+		break;
+# endif /* IPV6_TCLASS */
+	}
+#endif /* IP_TOS_IS_BROKEN */
 }
 
 /* Informs that the current session is interactive.  Sets IP flags for that. */
 
 void
-packet_set_interactive(int interactive)
+packet_set_interactive(int interactive, int qos_interactive, int qos_bulk)
 {
 	if (active_state->set_interactive_called)
 		return;
@@ -1759,7 +1786,7 @@ packet_set_interactive(int interactive)
 	if (!packet_connection_is_on_socket())
 		return;
 	set_nodelay(active_state->connection_in);
-	packet_set_tos(interactive);
+	packet_set_tos(interactive ? qos_interactive : qos_bulk);
 }
 
 /* Returns true if the current connection is interactive. */
