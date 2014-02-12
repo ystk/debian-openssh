@@ -1,4 +1,4 @@
-/* $OpenBSD: sshd.c,v 1.374 2010/03/07 11:57:13 dtucker Exp $ */
+/* $OpenBSD: sshd.c,v 1.388 2011/09/30 21:22:49 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -118,6 +118,7 @@
 #endif
 #include "monitor_wrap.h"
 #include "roaming.h"
+#include "ssh-sandbox.h"
 #include "version.h"
 
 #ifdef LIBWRAP
@@ -238,6 +239,7 @@ int startup_pipe;		/* in child */
 /* variables used for privilege separation */
 int use_privsep = -1;
 struct monitor *pmonitor = NULL;
+int privsep_is_preauth = 1;
 
 /* global authentication context */
 Authctxt *the_authctxt = NULL;
@@ -624,42 +626,65 @@ privsep_preauth(Authctxt *authctxt)
 {
 	int status;
 	pid_t pid;
+	struct ssh_sandbox *box = NULL;
 
 	/* Set up unprivileged child process to deal with network data */
 	pmonitor = monitor_init();
 	/* Store a pointer to the kex for later rekeying */
 	pmonitor->m_pkex = &xxx_kex;
 
+	if (use_privsep == PRIVSEP_SANDBOX)
+		box = ssh_sandbox_init();
 	pid = fork();
 	if (pid == -1) {
 		fatal("fork of unprivileged child failed");
 	} else if (pid != 0) {
 		debug2("Network child is on pid %ld", (long)pid);
 
-		close(pmonitor->m_recvfd);
+		if (box != NULL)
+			ssh_sandbox_parent_preauth(box, pid);
 		pmonitor->m_pid = pid;
 		monitor_child_preauth(authctxt, pmonitor);
-		close(pmonitor->m_sendfd);
 
 		/* Sync memory */
 		monitor_sync(pmonitor);
 
 		/* Wait for the child's exit status */
-		while (waitpid(pid, &status, 0) < 0)
-			if (errno != EINTR)
-				break;
-		return (1);
+		while (waitpid(pid, &status, 0) < 0) {
+			if (errno == EINTR)
+				continue;
+			pmonitor->m_pid = -1;
+			fatal("%s: waitpid: %s", __func__, strerror(errno));
+		}
+		privsep_is_preauth = 0;
+		pmonitor->m_pid = -1;
+		if (WIFEXITED(status)) {
+			if (WEXITSTATUS(status) != 0)
+				fatal("%s: preauth child exited with status %d",
+				    __func__, WEXITSTATUS(status));
+		} else if (WIFSIGNALED(status))
+			fatal("%s: preauth child terminated by signal %d",
+			    __func__, WTERMSIG(status));
+		if (box != NULL)
+			ssh_sandbox_parent_finish(box);
+		return 1;
 	} else {
 		/* child */
-
 		close(pmonitor->m_sendfd);
+		close(pmonitor->m_log_recvfd);
+
+		/* Arrange for logging to be sent to the monitor */
+		set_log_handler(mm_log_handler, pmonitor);
 
 		/* Demote the child */
 		if (getuid() == 0 || geteuid() == 0)
 			privsep_preauth_child();
 		setproctitle("%s", "[net]");
+		if (box != NULL)
+			ssh_sandbox_child(box);
+
+		return 0;
 	}
-	return (0);
 }
 
 static void
@@ -685,7 +710,6 @@ privsep_postauth(Authctxt *authctxt)
 		fatal("fork of unprivileged child failed");
 	else if (pmonitor->m_pid != 0) {
 		verbose("User child is on pid %ld", (long)pmonitor->m_pid);
-		close(pmonitor->m_recvfd);
 		buffer_clear(&loginmsg);
 		monitor_child_postauth(pmonitor);
 
@@ -693,7 +717,10 @@ privsep_postauth(Authctxt *authctxt)
 		exit(0);
 	}
 
+	/* child */
+
 	close(pmonitor->m_sendfd);
+	pmonitor->m_sendfd = -1;
 
 	/* Demote the private keys to public keys. */
 	demote_sensitive_data();
@@ -733,6 +760,7 @@ list_hostkey_types(void)
 		switch (key->type) {
 		case KEY_RSA:
 		case KEY_DSA:
+		case KEY_ECDSA:
 			if (buffer_len(&b) > 0)
 				buffer_append(&b, ",", 1);
 			p = key_ssh_name(key);
@@ -744,8 +772,11 @@ list_hostkey_types(void)
 		if (key == NULL)
 			continue;
 		switch (key->type) {
+		case KEY_RSA_CERT_V00:
+		case KEY_DSA_CERT_V00:
 		case KEY_RSA_CERT:
 		case KEY_DSA_CERT:
+		case KEY_ECDSA_CERT:
 			if (buffer_len(&b) > 0)
 				buffer_append(&b, ",", 1);
 			p = key_ssh_name(key);
@@ -767,10 +798,18 @@ get_hostkey_by_type(int type, int need_private)
 	Key *key;
 
 	for (i = 0; i < options.num_host_key_files; i++) {
-		if (type == KEY_RSA_CERT || type == KEY_DSA_CERT)
+		switch (type) {
+		case KEY_RSA_CERT_V00:
+		case KEY_DSA_CERT_V00:
+		case KEY_RSA_CERT:
+		case KEY_DSA_CERT:
+		case KEY_ECDSA_CERT:
 			key = sensitive_data.host_certificates[i];
-		else
+			break;
+		default:
 			key = sensitive_data.host_keys[i];
+			break;
+		}
 		if (key != NULL && key->type == type)
 			return need_private ?
 			    sensitive_data.host_keys[i] : key;
@@ -1103,7 +1142,7 @@ server_accept_loop(int *sock_in, int *sock_out, int *newsock, int *config_s)
 			    (int) received_sigterm);
 			close_listen_socks();
 			unlink(options.pid_file);
-			exit(255);
+			exit(received_sigterm == SIGTERM ? 0 : 255);
 		}
 		if (key_used && key_do_regen) {
 			generate_ephemeral_server_key();
@@ -1294,7 +1333,6 @@ main(int ac, char **av)
 	(void)set_auth_parameters(ac, av);
 #endif
 	__progname = ssh_get_progname(av[0]);
-	init_rng();
 
 	/* Save argv. Duplicate so setproctitle emulation doesn't clobber it */
 	saved_argc = ac;
@@ -1455,7 +1493,7 @@ main(int ac, char **av)
 	else
 		closefrom(REEXEC_DEVCRYPTO_RESERVED_FD);
 
-	SSLeay_add_all_algorithms();
+	OpenSSL_add_all_algorithms();
 
 	/*
 	 * Force logging to stderr until we have loaded the private host
@@ -1473,7 +1511,7 @@ main(int ac, char **av)
 	 * root's environment
 	 */
 	if (getenv("KRB5CCNAME") != NULL)
-		unsetenv("KRB5CCNAME");
+		(void) unsetenv("KRB5CCNAME");
 
 #ifdef _UNICOS
 	/* Cray can define user privs drop all privs now!
@@ -1567,6 +1605,7 @@ main(int ac, char **av)
 			break;
 		case KEY_RSA:
 		case KEY_DSA:
+		case KEY_ECDSA:
 			sensitive_data.have_ssh2_key = 1;
 			break;
 		}
@@ -2014,7 +2053,8 @@ main(int ac, char **av)
 	/* The connection has been terminated. */
 	packet_get_state(MODE_IN, NULL, NULL, NULL, &ibytes);
 	packet_get_state(MODE_OUT, NULL, NULL, NULL, &obytes);
-	verbose("Transferred: sent %llu, received %llu bytes", obytes, ibytes);
+	verbose("Transferred: sent %llu, received %llu bytes",
+	    (unsigned long long)obytes, (unsigned long long)ibytes);
 
 	verbose("Closing connection to %.500s port %d", remote_ip, remote_port);
 
@@ -2284,6 +2324,8 @@ do_ssh2_kex(void)
 		myproposal[PROPOSAL_COMP_ALGS_CTOS] =
 		myproposal[PROPOSAL_COMP_ALGS_STOC] = "none,zlib@openssh.com";
 	}
+	if (options.kex_algorithms != NULL)
+		myproposal[PROPOSAL_KEX_ALGS] = options.kex_algorithms;
 
 	myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS] = list_hostkey_types();
 
@@ -2293,6 +2335,7 @@ do_ssh2_kex(void)
 	kex->kex[KEX_DH_GRP14_SHA1] = kexdh_server;
 	kex->kex[KEX_DH_GEX_SHA1] = kexgex_server;
 	kex->kex[KEX_DH_GEX_SHA256] = kexgex_server;
+	kex->kex[KEX_ECDH_SHA2] = kexecdh_server;
 	kex->server = 1;
 	kex->client_version_string=client_version_string;
 	kex->server_version_string=server_version_string;
@@ -2321,8 +2364,16 @@ do_ssh2_kex(void)
 void
 cleanup_exit(int i)
 {
-	if (the_authctxt)
+	if (the_authctxt) {
 		do_cleanup(the_authctxt);
+		if (use_privsep && privsep_is_preauth && pmonitor->m_pid > 1) {
+			debug("Killing privsep child %d", pmonitor->m_pid);
+			if (kill(pmonitor->m_pid, SIGKILL) != 0 &&
+			    errno != ESRCH)
+				error("%s: kill(%d): %s", __func__,
+				    pmonitor->m_pid, strerror(errno));
+		}
+	}
 #ifdef SSH_AUDIT_EVENTS
 	/* done after do_cleanup so it can cancel the PAM auth 'thread' */
 	if (!use_privsep || mm_is_monitor())

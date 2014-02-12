@@ -1,4 +1,4 @@
-/* $OpenBSD: channels.c,v 1.303 2010/01/30 21:12:08 djm Exp $ */
+/* $OpenBSD: channels.c,v 1.315 2011/09/23 07:45:05 markus Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -114,16 +114,19 @@ typedef struct {
 } ForwardPermission;
 
 /* List of all permitted host/port pairs to connect by the user. */
-static ForwardPermission permitted_opens[SSH_MAX_FORWARDS_PER_DIRECTION];
+static ForwardPermission *permitted_opens = NULL;
 
 /* List of all permitted host/port pairs to connect by the admin. */
-static ForwardPermission permitted_adm_opens[SSH_MAX_FORWARDS_PER_DIRECTION];
+static ForwardPermission *permitted_adm_opens = NULL;
 
 /* Number of permitted host/port pairs in the array permitted by the user. */
 static int num_permitted_opens = 0;
 
 /* Number of permitted host/port pair in the array permitted by the admin. */
 static int num_adm_permitted_opens = 0;
+
+/* special-case port number meaning allow any port */
+#define FWD_PERMIT_ANY_PORT	0
 
 /*
  * If this is true, all opens are permitted.  This is the case on the server
@@ -302,6 +305,8 @@ channel_new(char *ctype, int type, int rfd, int wfd, int efd,
 	buffer_init(&c->output);
 	buffer_init(&c->extended);
 	c->path = NULL;
+	c->listening_addr = NULL;
+	c->listening_port = 0;
 	c->ostate = CHAN_OUTPUT_OPEN;
 	c->istate = CHAN_INPUT_OPEN;
 	c->flags = 0;
@@ -330,6 +335,7 @@ channel_new(char *ctype, int type, int rfd, int wfd, int efd,
 	c->ctl_chan = -1;
 	c->mux_rcb = NULL;
 	c->mux_ctx = NULL;
+	c->mux_pause = 0;
 	c->delayed = 1;		/* prevent call to channel_post handler */
 	TAILQ_INIT(&c->status_confirms);
 	debug("channel %d: new [%s]", found, remote_name);
@@ -372,9 +378,6 @@ channel_close_fd(int *fdp)
 static void
 channel_close_fds(Channel *c)
 {
-	debug3("channel %d: close_fds r %d w %d e %d",
-	    c->self, c->rfd, c->wfd, c->efd);
-
 	channel_close_fd(&c->sock);
 	channel_close_fd(&c->rfd);
 	channel_close_fd(&c->wfd);
@@ -412,6 +415,10 @@ channel_free(Channel *c)
 	if (c->path) {
 		xfree(c->path);
 		c->path = NULL;
+	}
+	if (c->listening_addr) {
+		xfree(c->listening_addr);
+		c->listening_addr = NULL;
 	}
 	while ((cc = TAILQ_FIRST(&c->status_confirms)) != NULL) {
 		if (cc->abandon_cb != NULL)
@@ -703,7 +710,7 @@ channel_register_status_confirm(int id, channel_confirm_cb *cb,
 }
 
 void
-channel_register_open_confirm(int id, channel_callback_fn *fn, void *ctx)
+channel_register_open_confirm(int id, channel_open_fn *fn, void *ctx)
 {
 	Channel *c = channel_lookup(id);
 
@@ -838,8 +845,9 @@ channel_pre_open(Channel *c, fd_set *readset, fd_set *writeset)
 		if (c->extended_usage == CHAN_EXTENDED_WRITE &&
 		    buffer_len(&c->extended) > 0)
 			FD_SET(c->efd, writeset);
-		else if (!(c->flags & CHAN_EOF_SENT) &&
-		    c->extended_usage == CHAN_EXTENDED_READ &&
+		else if (c->efd != -1 && !(c->flags & CHAN_EOF_SENT) &&
+		    (c->extended_usage == CHAN_EXTENDED_READ ||
+		    c->extended_usage == CHAN_EXTENDED_IGNORE) &&
 		    buffer_len(&c->extended) < c->remote_window)
 			FD_SET(c->efd, readset);
 	}
@@ -915,7 +923,7 @@ x11_open_helper(Buffer *b)
 	}
 	/* Check if authentication data matches our fake data. */
 	if (data_len != x11_fake_data_len ||
-	    memcmp(ucp + 12 + ((proto_len + 3) & ~3),
+	    timingsafe_bcmp(ucp + 12 + ((proto_len + 3) & ~3),
 		x11_fake_data, x11_fake_data_len) != 0) {
 		debug2("X11 auth data does not match fake data.");
 		return -1;
@@ -991,7 +999,7 @@ channel_pre_x11_open(Channel *c, fd_set *readset, fd_set *writeset)
 static void
 channel_pre_mux_client(Channel *c, fd_set *readset, fd_set *writeset)
 {
-	if (c->istate == CHAN_INPUT_OPEN &&
+	if (c->istate == CHAN_INPUT_OPEN && !c->mux_pause &&
 	    buffer_check_alloc(&c->input, CHAN_RBUF))
 		FD_SET(c->rfd, readset);
 	if (c->istate == CHAN_INPUT_WAIT_DRAIN) {
@@ -1642,13 +1650,14 @@ channel_handle_wfd(Channel *c, fd_set *readset, fd_set *writeset)
 {
 	struct termios tio;
 	u_char *data = NULL, *buf;
-	u_int dlen;
+	u_int dlen, olen = 0;
 	int len;
 
 	/* Send buffered output data to the socket. */
 	if (c->wfd != -1 &&
 	    FD_ISSET(c->wfd, writeset) &&
 	    buffer_len(&c->output) > 0) {
+		olen = buffer_len(&c->output);
 		if (c->output_filter != NULL) {
 			if ((buf = c->output_filter(c, &data, &dlen)) == NULL) {
 				debug2("channel %d: filter stops", c->self);
@@ -1667,7 +1676,6 @@ channel_handle_wfd(Channel *c, fd_set *readset, fd_set *writeset)
 
 		if (c->datagram) {
 			/* ignore truncated writes, datagrams might get lost */
-			c->local_consumed += dlen + 4;
 			len = write(c->wfd, buf, dlen);
 			xfree(data);
 			if (len < 0 && (errno == EINTR || errno == EAGAIN ||
@@ -1680,7 +1688,7 @@ channel_handle_wfd(Channel *c, fd_set *readset, fd_set *writeset)
 					chan_write_failed(c);
 				return -1;
 			}
-			return 1;
+			goto out;
 		}
 #ifdef _AIX
 		/* XXX: Later AIX versions can't push as much data to tty */
@@ -1722,10 +1730,10 @@ channel_handle_wfd(Channel *c, fd_set *readset, fd_set *writeset)
 		}
 #endif
 		buffer_consume(&c->output, len);
-		if (compat20 && len > 0) {
-			c->local_consumed += len;
-		}
 	}
+ out:
+	if (compat20 && olen > 0)
+		c->local_consumed += olen - buffer_len(&c->output);
 	return 1;
 }
 
@@ -1755,7 +1763,9 @@ channel_handle_efd(Channel *c, fd_set *readset, fd_set *writeset)
 				buffer_consume(&c->extended, len);
 				c->local_consumed += len;
 			}
-		} else if (c->extended_usage == CHAN_EXTENDED_READ &&
+		} else if (c->efd != -1 &&
+		    (c->extended_usage == CHAN_EXTENDED_READ ||
+		    c->extended_usage == CHAN_EXTENDED_IGNORE) &&
 		    (c->detach_close || FD_ISSET(c->efd, readset))) {
 			len = read(c->efd, buf, sizeof(buf));
 			debug2("channel %d: read %d from efd %d",
@@ -1768,7 +1778,11 @@ channel_handle_efd(Channel *c, fd_set *readset, fd_set *writeset)
 				    c->self, c->efd);
 				channel_close_fd(&c->efd);
 			} else {
-				buffer_append(&c->extended, buf, len);
+				if (c->extended_usage == CHAN_EXTENDED_IGNORE) {
+					debug3("channel %d: discard efd",
+					    c->self);
+				} else
+					buffer_append(&c->extended, buf, len);
 			}
 		}
 	}
@@ -1840,7 +1854,7 @@ channel_post_mux_client(Channel *c, fd_set *readset, fd_set *writeset)
 	if (!compat20)
 		fatal("%s: entered with !compat20", __func__);
 
-	if (c->rfd != -1 && FD_ISSET(c->rfd, readset) &&
+	if (c->rfd != -1 && !c->mux_pause && FD_ISSET(c->rfd, readset) &&
 	    (c->istate == CHAN_INPUT_OPEN ||
 	    c->istate == CHAN_INPUT_WAIT_DRAIN)) {
 		/*
@@ -2164,6 +2178,14 @@ channel_output_poll(void)
 
 					data = buffer_get_string(&c->input,
 					    &dlen);
+					if (dlen > c->remote_window ||
+					    dlen > c->remote_maxpacket) {
+						debug("channel %d: datagram "
+						    "too big for channel",
+						    c->self);
+						xfree(data);
+						continue;
+					}
 					packet_start(SSH2_MSG_CHANNEL_DATA);
 					packet_put_int(c->remote_id);
 					packet_put_string(data, dlen);
@@ -2249,7 +2271,7 @@ channel_input_data(int type, u_int32_t seq, void *ctxt)
 {
 	int id;
 	char *data;
-	u_int data_len;
+	u_int data_len, win_len;
 	Channel *c;
 
 	/* Get the channel number and verify it. */
@@ -2265,6 +2287,9 @@ channel_input_data(int type, u_int32_t seq, void *ctxt)
 
 	/* Get the data. */
 	data = packet_get_string_ptr(&data_len);
+	win_len = data_len;
+	if (c->datagram)
+		win_len += 4;  /* string length header */
 
 	/*
 	 * Ignore data for protocol > 1.3 if output end is no longer open.
@@ -2275,23 +2300,23 @@ channel_input_data(int type, u_int32_t seq, void *ctxt)
 	 */
 	if (!compat13 && c->ostate != CHAN_OUTPUT_OPEN) {
 		if (compat20) {
-			c->local_window -= data_len;
-			c->local_consumed += data_len;
+			c->local_window -= win_len;
+			c->local_consumed += win_len;
 		}
 		return;
 	}
 
 	if (compat20) {
-		if (data_len > c->local_maxpacket) {
+		if (win_len > c->local_maxpacket) {
 			logit("channel %d: rcvd big packet %d, maxpack %d",
-			    c->self, data_len, c->local_maxpacket);
+			    c->self, win_len, c->local_maxpacket);
 		}
-		if (data_len > c->local_window) {
+		if (win_len > c->local_window) {
 			logit("channel %d: rcvd too much data %d, win %d",
-			    c->self, data_len, c->local_window);
+			    c->self, win_len, c->local_window);
 			return;
 		}
-		c->local_window -= data_len;
+		c->local_window -= win_len;
 	}
 	if (c->datagram)
 		buffer_put_string(&c->output, data, data_len);
@@ -2463,7 +2488,7 @@ channel_input_open_confirmation(int type, u_int32_t seq, void *ctxt)
 		c->remote_maxpacket = packet_get_int();
 		if (c->open_confirm) {
 			debug2("callback start");
-			c->open_confirm(c->self, c->open_confirm_ctx);
+			c->open_confirm(c->self, 1, c->open_confirm_ctx);
 			debug2("callback done");
 		}
 		debug2("channel %d: open confirm rwindow %u rmax %u", c->self,
@@ -2514,6 +2539,11 @@ channel_input_open_failure(int type, u_int32_t seq, void *ctxt)
 			xfree(msg);
 		if (lang != NULL)
 			xfree(lang);
+		if (c->open_confirm) {
+			debug2("callback start");
+			c->open_confirm(c->self, 0, c->open_confirm_ctx);
+			debug2("callback done");
+		}
 	}
 	packet_check_eom();
 	/* Schedule the channel for cleanup/deletion. */
@@ -2613,6 +2643,46 @@ channel_set_af(int af)
 	IPv4or6 = af;
 }
 
+
+/*
+ * Determine whether or not a port forward listens to loopback, the
+ * specified address or wildcard. On the client, a specified bind
+ * address will always override gateway_ports. On the server, a
+ * gateway_ports of 1 (``yes'') will override the client's specification
+ * and force a wildcard bind, whereas a value of 2 (``clientspecified'')
+ * will bind to whatever address the client asked for.
+ *
+ * Special-case listen_addrs are:
+ *
+ * "0.0.0.0"               -> wildcard v4/v6 if SSH_OLD_FORWARD_ADDR
+ * "" (empty string), "*"  -> wildcard v4/v6
+ * "localhost"             -> loopback v4/v6
+ */
+static const char *
+channel_fwd_bind_addr(const char *listen_addr, int *wildcardp,
+    int is_client, int gateway_ports)
+{
+	const char *addr = NULL;
+	int wildcard = 0;
+
+	if (listen_addr == NULL) {
+		/* No address specified: default to gateway_ports setting */
+		if (gateway_ports)
+			wildcard = 1;
+	} else if (gateway_ports || is_client) {
+		if (((datafellows & SSH_OLD_FORWARD_ADDR) &&
+		    strcmp(listen_addr, "0.0.0.0") == 0 && is_client == 0) ||
+		    *listen_addr == '\0' || strcmp(listen_addr, "*") == 0 ||
+		    (!is_client && gateway_ports == 1))
+			wildcard = 1;
+		else if (strcmp(listen_addr, "localhost") != 0)
+			addr = listen_addr;
+	}
+	if (wildcardp != NULL)
+		*wildcardp = wildcard;
+	return addr;
+}
+
 static int
 channel_setup_fwd_listener(int type, const char *listen_addr,
     u_short listen_port, int *allocated_listen_port,
@@ -2638,36 +2708,9 @@ channel_setup_fwd_listener(int type, const char *listen_addr,
 		return 0;
 	}
 
-	/*
-	 * Determine whether or not a port forward listens to loopback,
-	 * specified address or wildcard. On the client, a specified bind
-	 * address will always override gateway_ports. On the server, a
-	 * gateway_ports of 1 (``yes'') will override the client's
-	 * specification and force a wildcard bind, whereas a value of 2
-	 * (``clientspecified'') will bind to whatever address the client
-	 * asked for.
-	 *
-	 * Special-case listen_addrs are:
-	 *
-	 * "0.0.0.0"               -> wildcard v4/v6 if SSH_OLD_FORWARD_ADDR
-	 * "" (empty string), "*"  -> wildcard v4/v6
-	 * "localhost"             -> loopback v4/v6
-	 */
-	addr = NULL;
-	if (listen_addr == NULL) {
-		/* No address specified: default to gateway_ports setting */
-		if (gateway_ports)
-			wildcard = 1;
-	} else if (gateway_ports || is_client) {
-		if (((datafellows & SSH_OLD_FORWARD_ADDR) &&
-		    strcmp(listen_addr, "0.0.0.0") == 0 && is_client == 0) ||
-		    *listen_addr == '\0' || strcmp(listen_addr, "*") == 0 ||
-		    (!is_client && gateway_ports == 1))
-			wildcard = 1;
-		else if (strcmp(listen_addr, "localhost") != 0)
-			addr = listen_addr;
-	}
-
+	/* Determine the bind address, cf. channel_fwd_bind_addr() comment */
+	addr = channel_fwd_bind_addr(listen_addr, &wildcard,
+	    is_client, gateway_ports);
 	debug3("channel_setup_fwd_listener: type %d wildcard %d addr %s",
 	    type, wildcard, (addr == NULL) ? "NULL" : addr);
 
@@ -2771,7 +2814,12 @@ channel_setup_fwd_listener(int type, const char *listen_addr,
 		    0, "port listener", 1);
 		c->path = xstrdup(host);
 		c->host_port = port_to_connect;
-		c->listening_port = listen_port;
+		c->listening_addr = addr == NULL ? NULL : xstrdup(addr);
+		if (listen_port == 0 && allocated_listen_port != NULL &&
+		    !(datafellows & SSH_BUG_DYNAMIC_RPORT))
+			c->listening_port = *allocated_listen_port;
+		else
+			c->listening_port = listen_port;
 		success = 1;
 	}
 	if (success == 0)
@@ -2789,9 +2837,44 @@ channel_cancel_rport_listener(const char *host, u_short port)
 
 	for (i = 0; i < channels_alloc; i++) {
 		Channel *c = channels[i];
+		if (c == NULL || c->type != SSH_CHANNEL_RPORT_LISTENER)
+			continue;
+		if (strcmp(c->path, host) == 0 && c->listening_port == port) {
+			debug2("%s: close channel %d", __func__, i);
+			channel_free(c);
+			found = 1;
+		}
+	}
 
-		if (c != NULL && c->type == SSH_CHANNEL_RPORT_LISTENER &&
-		    strcmp(c->path, host) == 0 && c->listening_port == port) {
+	return (found);
+}
+
+int
+channel_cancel_lport_listener(const char *lhost, u_short lport,
+    int cport, int gateway_ports)
+{
+	u_int i;
+	int found = 0;
+	const char *addr = channel_fwd_bind_addr(lhost, NULL, 1, gateway_ports);
+
+	for (i = 0; i < channels_alloc; i++) {
+		Channel *c = channels[i];
+		if (c == NULL || c->type != SSH_CHANNEL_PORT_LISTENER)
+			continue;
+		if (c->listening_port != lport)
+			continue;
+		if (cport == CHANNEL_CANCEL_PORT_STATIC) {
+			/* skip dynamic forwardings */
+			if (c->host_port == 0)
+				continue;
+		} else {
+			if (c->host_port != cport)
+				continue;
+		}
+		if ((c->listening_addr == NULL && addr != NULL) ||
+		    (c->listening_addr != NULL && addr == NULL))
+			continue;
+		if (addr == NULL || strcmp(c->listening_addr, addr) == 0) {
 			debug2("%s: close channel %d", __func__, i);
 			channel_free(c);
 			found = 1;
@@ -2822,41 +2905,44 @@ channel_setup_remote_fwd_listener(const char *listen_address,
 }
 
 /*
+ * Translate the requested rfwd listen host to something usable for
+ * this server.
+ */
+static const char *
+channel_rfwd_bind_host(const char *listen_host)
+{
+	if (listen_host == NULL) {
+		if (datafellows & SSH_BUG_RFWD_ADDR)
+			return "127.0.0.1";
+		else
+			return "localhost";
+	} else if (*listen_host == '\0' || strcmp(listen_host, "*") == 0) {
+		if (datafellows & SSH_BUG_RFWD_ADDR)
+			return "0.0.0.0";
+		else
+			return "";
+	} else
+		return listen_host;
+}
+
+/*
  * Initiate forwarding of connections to port "port" on remote host through
  * the secure channel to host:port from local side.
+ * Returns handle (index) for updating the dynamic listen port with
+ * channel_update_permitted_opens().
  */
-
 int
 channel_request_remote_forwarding(const char *listen_host, u_short listen_port,
     const char *host_to_connect, u_short port_to_connect)
 {
-	int type, success = 0;
-
-	/* Record locally that connection to this host/port is permitted. */
-	if (num_permitted_opens >= SSH_MAX_FORWARDS_PER_DIRECTION)
-		fatal("channel_request_remote_forwarding: too many forwards");
+	int type, success = 0, idx = -1;
 
 	/* Send the forward request to the remote side. */
 	if (compat20) {
-		const char *address_to_bind;
-		if (listen_host == NULL) {
-			if (datafellows & SSH_BUG_RFWD_ADDR)
-				address_to_bind = "127.0.0.1";
-			else
-				address_to_bind = "localhost";
-		} else if (*listen_host == '\0' ||
-			   strcmp(listen_host, "*") == 0) {
-			if (datafellows & SSH_BUG_RFWD_ADDR)
-				address_to_bind = "0.0.0.0";
-			else
-				address_to_bind = "";
-		} else
-			address_to_bind = listen_host;
-
 		packet_start(SSH2_MSG_GLOBAL_REQUEST);
 		packet_put_cstring("tcpip-forward");
-		packet_put_char(1);			/* boolean: want reply */
-		packet_put_cstring(address_to_bind);
+		packet_put_char(1);		/* boolean: want reply */
+		packet_put_cstring(channel_rfwd_bind_host(listen_host));
 		packet_put_int(listen_port);
 		packet_send();
 		packet_write_wait();
@@ -2885,25 +2971,28 @@ channel_request_remote_forwarding(const char *listen_host, u_short listen_port,
 		}
 	}
 	if (success) {
-		permitted_opens[num_permitted_opens].host_to_connect = xstrdup(host_to_connect);
-		permitted_opens[num_permitted_opens].port_to_connect = port_to_connect;
-		permitted_opens[num_permitted_opens].listen_port = listen_port;
-		num_permitted_opens++;
+		/* Record that connection to this host/port is permitted. */
+		permitted_opens = xrealloc(permitted_opens,
+		    num_permitted_opens + 1, sizeof(*permitted_opens));
+		idx = num_permitted_opens++;
+		permitted_opens[idx].host_to_connect = xstrdup(host_to_connect);
+		permitted_opens[idx].port_to_connect = port_to_connect;
+		permitted_opens[idx].listen_port = listen_port;
 	}
-	return (success ? 0 : -1);
+	return (idx);
 }
 
 /*
  * Request cancellation of remote forwarding of connection host:port from
  * local side.
  */
-void
+int
 channel_request_rforward_cancel(const char *host, u_short port)
 {
 	int i;
 
 	if (!compat20)
-		return;
+		return -1;
 
 	for (i = 0; i < num_permitted_opens; i++) {
 		if (permitted_opens[i].host_to_connect != NULL &&
@@ -2912,12 +3001,12 @@ channel_request_rforward_cancel(const char *host, u_short port)
 	}
 	if (i >= num_permitted_opens) {
 		debug("%s: requested forward not found", __func__);
-		return;
+		return -1;
 	}
 	packet_start(SSH2_MSG_GLOBAL_REQUEST);
 	packet_put_cstring("cancel-tcpip-forward");
 	packet_put_char(0);
-	packet_put_cstring(host == NULL ? "" : host);
+	packet_put_cstring(channel_rfwd_bind_host(host));
 	packet_put_int(port);
 	packet_send();
 
@@ -2925,6 +3014,8 @@ channel_request_rforward_cancel(const char *host, u_short port)
 	permitted_opens[i].port_to_connect = 0;
 	xfree(permitted_opens[i].host_to_connect);
 	permitted_opens[i].host_to_connect = NULL;
+
+	return 0;
 }
 
 /*
@@ -2982,10 +3073,10 @@ channel_permit_all_opens(void)
 void
 channel_add_permitted_opens(char *host, int port)
 {
-	if (num_permitted_opens >= SSH_MAX_FORWARDS_PER_DIRECTION)
-		fatal("channel_add_permitted_opens: too many forwards");
 	debug("allow port forwarding to host %s port %d", host, port);
 
+	permitted_opens = xrealloc(permitted_opens,
+	    num_permitted_opens + 1, sizeof(*permitted_opens));
 	permitted_opens[num_permitted_opens].host_to_connect = xstrdup(host);
 	permitted_opens[num_permitted_opens].port_to_connect = port;
 	num_permitted_opens++;
@@ -2993,13 +3084,42 @@ channel_add_permitted_opens(char *host, int port)
 	all_opens_permitted = 0;
 }
 
+/*
+ * Update the listen port for a dynamic remote forward, after
+ * the actual 'newport' has been allocated. If 'newport' < 0 is
+ * passed then they entry will be invalidated.
+ */
+void
+channel_update_permitted_opens(int idx, int newport)
+{
+	if (idx < 0 || idx >= num_permitted_opens) {
+		debug("channel_update_permitted_opens: index out of range:"
+		    " %d num_permitted_opens %d", idx, num_permitted_opens);
+		return;
+	}
+	debug("%s allowed port %d for forwarding to host %s port %d",
+	    newport > 0 ? "Updating" : "Removing",
+	    newport,
+	    permitted_opens[idx].host_to_connect,
+	    permitted_opens[idx].port_to_connect);
+	if (newport >= 0)  {
+		permitted_opens[idx].listen_port = 
+		    (datafellows & SSH_BUG_DYNAMIC_RPORT) ? 0 : newport;
+	} else {
+		permitted_opens[idx].listen_port = 0;
+		permitted_opens[idx].port_to_connect = 0;
+		xfree(permitted_opens[idx].host_to_connect);
+		permitted_opens[idx].host_to_connect = NULL;
+	}
+}
+
 int
 channel_add_adm_permitted_opens(char *host, int port)
 {
-	if (num_adm_permitted_opens >= SSH_MAX_FORWARDS_PER_DIRECTION)
-		fatal("channel_add_adm_permitted_opens: too many forwards");
 	debug("config allows port forwarding to host %s port %d", host, port);
 
+	permitted_adm_opens = xrealloc(permitted_adm_opens,
+	    num_adm_permitted_opens + 1, sizeof(*permitted_adm_opens));
 	permitted_adm_opens[num_adm_permitted_opens].host_to_connect
 	     = xstrdup(host);
 	permitted_adm_opens[num_adm_permitted_opens].port_to_connect = port;
@@ -3014,6 +3134,10 @@ channel_clear_permitted_opens(void)
 	for (i = 0; i < num_permitted_opens; i++)
 		if (permitted_opens[i].host_to_connect != NULL)
 			xfree(permitted_opens[i].host_to_connect);
+	if (num_permitted_opens > 0) {
+		xfree(permitted_opens);
+		permitted_opens = NULL;
+	}
 	num_permitted_opens = 0;
 }
 
@@ -3025,6 +3149,10 @@ channel_clear_adm_permitted_opens(void)
 	for (i = 0; i < num_adm_permitted_opens; i++)
 		if (permitted_adm_opens[i].host_to_connect != NULL)
 			xfree(permitted_adm_opens[i].host_to_connect);
+	if (num_adm_permitted_opens > 0) {
+		xfree(permitted_adm_opens);
+		permitted_adm_opens = NULL;
+	}
 	num_adm_permitted_opens = 0;
 }
 
@@ -3043,6 +3171,28 @@ channel_print_adm_permitted_opens(void)
 			printf(" %s:%d", permitted_adm_opens[i].host_to_connect,
 			    permitted_adm_opens[i].port_to_connect);
 	printf("\n");
+}
+
+/* returns port number, FWD_PERMIT_ANY_PORT or -1 on error */
+int
+permitopen_port(const char *p)
+{
+	int port;
+
+	if (strcmp(p, "*") == 0)
+		return FWD_PERMIT_ANY_PORT;
+	if ((port = a2port(p)) > 0)
+		return port;
+	return -1;
+}
+
+static int
+port_match(u_short allowedport, u_short requestedport)
+{
+	if (allowedport == FWD_PERMIT_ANY_PORT ||
+	    allowedport == requestedport)
+		return 1;
+	return 0;
 }
 
 /* Try to start non-blocking connect to next host in cctx list */
@@ -3147,7 +3297,7 @@ channel_connect_by_listen_address(u_short listen_port, char *ctype, char *rname)
 
 	for (i = 0; i < num_permitted_opens; i++) {
 		if (permitted_opens[i].host_to_connect != NULL &&
-		    permitted_opens[i].listen_port == listen_port) {
+		    port_match(permitted_opens[i].listen_port, listen_port)) {
 			return connect_to(
 			    permitted_opens[i].host_to_connect,
 			    permitted_opens[i].port_to_connect, ctype, rname);
@@ -3168,7 +3318,7 @@ channel_connect_to(const char *host, u_short port, char *ctype, char *rname)
 	if (!permit) {
 		for (i = 0; i < num_permitted_opens; i++)
 			if (permitted_opens[i].host_to_connect != NULL &&
-			    permitted_opens[i].port_to_connect == port &&
+			    port_match(permitted_opens[i].port_to_connect, port) &&
 			    strcmp(permitted_opens[i].host_to_connect, host) == 0)
 				permit = 1;
 	}
@@ -3177,7 +3327,7 @@ channel_connect_to(const char *host, u_short port, char *ctype, char *rname)
 		permit_adm = 0;
 		for (i = 0; i < num_adm_permitted_opens; i++)
 			if (permitted_adm_opens[i].host_to_connect != NULL &&
-			    permitted_adm_opens[i].port_to_connect == port &&
+			    port_match(permitted_adm_opens[i].port_to_connect, port) &&
 			    strcmp(permitted_adm_opens[i].host_to_connect, host)
 			    == 0)
 				permit_adm = 1;
@@ -3534,7 +3684,7 @@ deny_input_open(int type, u_int32_t seq, void *ctxt)
  */
 void
 x11_request_forwarding_with_spoofing(int client_session_id, const char *disp,
-    const char *proto, const char *data)
+    const char *proto, const char *data, int want_reply)
 {
 	u_int data_len = (u_int) strlen(data) / 2;
 	u_int i, value;
@@ -3587,7 +3737,7 @@ x11_request_forwarding_with_spoofing(int client_session_id, const char *disp,
 
 	/* Send the request packet. */
 	if (compat20) {
-		channel_request_start(client_session_id, "x11-req", 0);
+		channel_request_start(client_session_id, "x11-req", want_reply);
 		packet_put_char(0);	/* XXX bool single connection */
 	} else {
 		packet_start(SSH_CMSG_X11_REQUEST_FORWARDING);
