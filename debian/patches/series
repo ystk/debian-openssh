@@ -25,6 +25,12 @@ scp-quoting.patch
 shell-path.patch
 ssh-copy-id-trailing-colons.patch
 dnssec-sshfp.patch
+auth-log-verbosity.patch
+
+# Security fixes
+forced-command-debug-security.patch
+max-startups-default.patch
+gss-serv-int-overflow.patch
 
 # Versioning
 package-versioning.patch
@@ -42,3 +48,5 @@ doc-hash-tab-completion.patch
 # Debian-specific configuration
 gnome-ssh-askpass2-icon.patch
 debian-config.patch
+CVE-2014-2532.patch
+CVE-2014-2653.patch

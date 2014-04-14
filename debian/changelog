@@ -1,3 +1,42 @@
+openssh (1:5.5p1-6+squeeze5) oldstable-security; urgency=high
+
+  * CVE-2014-2532: Disallow invalid characters in environment variable names
+    to prevent bypassing AcceptEnv wildcard restrictions.
+  * CVE-2014-2653: Attempt SSHFP lookup even if server presents a
+    certificate (closes: #742513).
+
+ -- Colin Watson <cjwatson@debian.org>  Thu, 03 Apr 2014 01:05:27 +0100
+
+openssh (1:5.5p1-6+squeeze4) stable; urgency=low
+
+  * CVE-2011-5000: Fix potential int overflow when using gssapi-with-mac
+    authentation.
+
+ -- Colin Watson <cjwatson@debian.org>  Sun, 03 Mar 2013 14:14:03 +0000
+
+openssh (1:5.5p1-6+squeeze3) stable; urgency=low
+
+  * CVE-2010-5107: Improve DoS resistance by changing default of MaxStartups
+    to 10:30:100 (closes: #700102).
+
+ -- Colin Watson <cjwatson@debian.org>  Fri, 08 Feb 2013 21:39:15 +0000
+
+openssh (1:5.5p1-6+squeeze2) stable; urgency=high
+
+  * CVE-2012-0814: Don't send the actual forced command in a debug message,
+    which allowed remote authenticated users to obtain potentially sensitive
+    information by reading these messages (closes: #657445).
+
+ -- Colin Watson <cjwatson@debian.org>  Mon, 20 Feb 2012 02:23:55 +0000
+
+openssh (1:5.5p1-6+squeeze1) stable; urgency=low
+
+  * Quieten logs when multiple from= restrictions are used in different
+    authorized_keys lines for the same key; it's still not ideal, but at
+    least you'll only get one log entry per key (closes: #630606).
+
+ -- Colin Watson <cjwatson@debian.org>  Thu, 28 Jul 2011 16:43:48 +0000
+
 openssh (1:5.5p1-6) unstable; urgency=low
 
   * Touch /var/run/sshd/.placeholder in the preinst so that /var/run/sshd,
