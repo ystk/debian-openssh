@@ -1,3 +1,5 @@
+#! /usr/bin/dh-exec
+
 etc/ssh/moduli
 etc/ssh/ssh_config
 usr/bin/scp
@@ -8,7 +10,6 @@ usr/bin/ssh-add
 usr/bin/ssh-agent
 usr/bin/ssh-keygen
 usr/bin/ssh-keyscan
-usr/bin/ssh-vulnkey
 usr/lib/openssh/ssh-keysign
 usr/lib/openssh/ssh-pkcs11-helper
 usr/share/man/man1/scp.1
@@ -18,7 +19,6 @@ usr/share/man/man1/ssh-add.1
 usr/share/man/man1/ssh-agent.1
 usr/share/man/man1/ssh-keygen.1
 usr/share/man/man1/ssh-keyscan.1
-usr/share/man/man1/ssh-vulnkey.1
 usr/share/man/man1/ssh.1
 usr/share/man/man5/moduli.5
 usr/share/man/man5/ssh_config.5
@@ -27,3 +27,11 @@ usr/share/man/man8/ssh-pkcs11-helper.8
 
 contrib/ssh-copy-id usr/bin
 debian/ssh-argv0 usr/bin
+
+# dh_apport would be neater, but at the time of writing it isn't in unstable
+# yet.
+debian/openssh-client.apport => usr/share/apport/package-hooks/openssh-client.py
+
+# Upstart user job (only used under user sessions).
+debian/ssh-agent.user-session.upstart => usr/share/upstart/sessions/ssh-agent.conf
+
