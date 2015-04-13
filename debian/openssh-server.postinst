@@ -111,6 +111,7 @@ create_key() {
 		if which restorecon >/dev/null 2>&1; then
 			restorecon "$file" "$file.pub"
 		fi
+		ssh-keygen -l -f "$file.pub"
 	fi
 }
 
@@ -264,10 +265,8 @@ EOF
 
 fix_statoverride() {
 # Remove an erronous override for sshd (we should have overridden ssh)
-	if [ -x /usr/sbin/dpkg-statoverride ]; then
-		if dpkg-statoverride --list /usr/sbin/sshd >/dev/null ; then
-			dpkg-statoverride --remove /usr/sbin/sshd
-		fi
+	if dpkg-statoverride --list /usr/sbin/sshd >/dev/null; then
+		dpkg-statoverride --remove /usr/sbin/sshd
 	fi
 }
 

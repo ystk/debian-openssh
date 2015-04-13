@@ -2,8 +2,9 @@ Source: openssh
 Section: net
 Priority: standard
 Maintainer: Debian OpenSSH Maintainers <debian-ssh@lists.debian.org>
-Build-Depends: libwrap0-dev | libwrap-dev, zlib1g-dev (>= 1:1.2.3), libssl-dev (>= 0.9.8g), libpam0g-dev | libpam-dev, libgtk2.0-dev, libedit-dev, debhelper (>= 9~), dh-exec, libselinux1-dev [linux-any], libkrb5-dev | heimdal-dev, dpkg (>= 1.16.1~), libck-connector-dev, dh-autoreconf, autotools-dev, dh-systemd (>= 1.4)
-Standards-Version: 3.9.5
+Build-Depends: libwrap0-dev | libwrap-dev, zlib1g-dev (>= 1:1.2.3), libssl-dev (>= 0.9.8g), libpam0g-dev | libpam-dev, libgtk2.0-dev, libedit-dev, debhelper (>= 9~), dh-exec, libselinux1-dev [linux-any], libkrb5-dev | heimdal-dev, dpkg-dev (>= 1.16.1~), libck-connector-dev, dh-autoreconf, autotools-dev, dh-systemd (>= 1.4)
+XS-Testsuite: autopkgtest
+Standards-Version: 3.9.6
 Uploaders: Colin Watson <cjwatson@debian.org>, Matthew Vernon <matthew@debian.org>
 Homepage: http://www.openssh.org/
 Vcs-Git: git://anonscm.debian.org/pkg-ssh/openssh.git
@@ -101,6 +102,7 @@ Description: secure shell (SSH) sftp server module, for SFTP access from remote 
 Package: ssh
 Priority: extra
 Architecture: all
+Pre-Depends: dpkg (>= 1.17.5)
 Depends: ${misc:Depends}, openssh-client (>= ${binary:Version}), openssh-server (>= ${binary:Version})
 Description: secure shell client and server (metapackage)
  This metapackage is a convenient way to install both the OpenSSH client
@@ -133,7 +135,7 @@ Description: interactive X program to prompt users for a passphrase for ssh-add
  provided to add to your choice and/or confusion.
 
 Package: openssh-client-udeb
-XC-Package-Type: udeb
+Package-Type: udeb
 Section: debian-installer
 Priority: optional
 Architecture: any
@@ -147,7 +149,7 @@ Description: secure shell client for the Debian installer
  This package provides the ssh client for use in debian-installer.
 
 Package: openssh-server-udeb
-XC-Package-Type: udeb
+Package-Type: udeb
 Section: debian-installer
 Priority: optional
 Architecture: any
