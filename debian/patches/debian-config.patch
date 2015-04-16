@@ -1,4 +1,4 @@
-From 762c062828f5a8f6ed189ed6e44ad38fd92f8b36 Mon Sep 17 00:00:00 2001
+From 581424965d2d722a991c3247d4c0bb5950cb4fc5 Mon Sep 17 00:00:00 2001
 From: Colin Watson <cjwatson@debian.org>
 Date: Sun, 9 Feb 2014 16:10:18 +0000
 Subject: Various Debian-specific configuration changes
@@ -22,7 +22,7 @@ debian/openssh-server.postinst.
 
 Author: Russ Allbery <rra@debian.org>
 Forwarded: not-needed
-Last-Update: 2014-02-12
+Last-Update: 2015-03-22
 
 Patch-Name: debian-config.patch
 ---
