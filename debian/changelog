@@ -1,3 +1,14 @@
+openssh (1:5.5p1-6+squeeze6) squeeze-lts; urgency=medium
+
+  * Non-maintainer upload by the Debian LTS team.
+  * CVE-2015-5352: Reject X11 connections after hard-coded Xauth cookie
+    expiration time of 1200 seconds. (Closes: #790798).
+  * CVE-2015-5600: Only query each keyboard-interactive device once per
+    authentication request regardless of how many times it is listed.
+    (Closes: #793616).
+
+ -- Mike Gabriel <sunweaver@debian.org>  Fri, 07 Aug 2015 09:15:26 +0200
+
 openssh (1:5.5p1-6+squeeze5) oldstable-security; urgency=high
 
   * CVE-2014-2532: Disallow invalid characters in environment variable names
