@@ -1,3 +1,13 @@
+openssh (1:5.5p1-6+squeeze7) squeeze-lts; urgency=medium
+
+  * Non-maintainer upload by the Debain LTS Team:
+    SECURITY REGRESSION, random keyboard-interactive auth failures because of
+    uninitialized struct field.
+  * debian/patches:
+      + Add CVE-2015-5600-2.patch. Properly initialize field in auth2-chall.c.
+
+ -- Mike Gabriel <sunweaver@debian.org>  Tue, 29 Sep 2015 14:59:08 +0200
+
 openssh (1:5.5p1-6+squeeze6) squeeze-lts; urgency=medium
 
   * Non-maintainer upload by the Debian LTS team.
