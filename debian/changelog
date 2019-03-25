@@ -1,3 +1,16 @@
+openssh (1:6.7p1-5+deb8u8) jessie-security; urgency=medium
+
+  * Non-maintainer upload by the LTS Team.
+  * CVE-2018-20685: Disallow empty incoming filename or ones that refer
+    to the current directory; based on report/patch from Harry Sintonen.
+  * CVE-2019-6109: Sanitize scp filenames via snmprintf. To do this we move
+    the progressmeter formatting outside of signal handler context and have the
+    atomicio callback called for EINTR, too.
+  * CVE-2019-6111: Check in scp client that filenames sent during remote->local
+    directory copies satisfy the wildcard specified by the user.
+
+ -- Mike Gabriel <sunweaver@debian.org>  Fri, 01 Feb 2019 00:45:09 +0100
+
 openssh (1:6.7p1-5+deb8u7) jessie-security; urgency=medium
 
   * Add debian/patches/CVE-2016-1908-3.patch: client_x11_get_proto: check if
