@@ -1,3 +1,14 @@
+openssh (1:6.7p1-5+deb8u9) jessie-security; urgency=medium
+
+  * Non-maintainer upload by the ELTS team.
+  * remote code execution relating to PKCS#11 providers
+    - d/p/CVE-2023-38408-1.patch: terminate process if requested
+      to load a PKCS#11 provider that isn't a PKCS#11 provider in
+      ssh-pkcs11.c.
+    - CVE-2023-38408
+
+ -- Utkarsh Gupta <utkarsh@debian.org>  Thu, 17 Aug 2023 22:10:27 +0530
+
 openssh (1:6.7p1-5+deb8u8) jessie-security; urgency=medium
 
   * Non-maintainer upload by the LTS Team.
